@@ -6,8 +6,8 @@ Simple HTTP server.
 To build a production mode binary, use the following command:
 
 ```sh
-$ go build -ldflags="-s -w" cli/bundle/primeshell.go
-$ upx --best -k ./primeshell
+$ go build -ldflags="-s -w" main.go
+$ upx --best -k ./up
 ```
 
 # License
