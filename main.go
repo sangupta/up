@@ -118,6 +118,11 @@ func createFileMap(lines []string) error {
 
 func httpHandler(writer http.ResponseWriter, request *http.Request) {
 	uriPath := request.URL.Path
+
+	if uriPath == "/" {
+		uriPath = "/index.html"
+	}
+
 	absPath, exists := fileMap[uriPath]
 
 	if !exists {
@@ -177,6 +182,10 @@ func listAllFilesFromFolder(path string, recursive bool) ([]string, error) {
 	return fileList, nil
 }
 
+//
+// Function responsible to serve the valid request.
+// Checks that the URI matches a file on disk have already been made.
+//
 func serveFile(writer http.ResponseWriter, request *http.Request, absFilePath string) {
 	stat, err := os.Lstat(absFilePath)
 	if err != nil {
