@@ -78,7 +78,8 @@ func createFileMap(lines []string) error {
 		// now check if this is a file or a folder
 		fileStat, err := os.Lstat(absPath)
 		if err != nil {
-			return err
+			fmt.Println("WARN: error reading path: " + absPath + "; " + err.Error())
+			continue
 		}
 
 		// check for single file
