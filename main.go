@@ -48,9 +48,10 @@ func main() {
 	sendEtag = *etag
 	sendStrongETag = *strong
 
-	fmt.Println("  Port: ", port)
+	fmt.Println("  Port: ", strconv.Itoa(*port))
 	fmt.Println("  CORS Enabled: ", sendCors)
 	fmt.Println("  ETag Enabled: ", sendEtag)
+	fmt.Println("  String ETag: ", sendStrongETag)
 
 	// read if there is a list of files
 	lines := readConfigFile()
