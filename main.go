@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -19,12 +22,41 @@ import (
 )
 
 var fileMap map[string]string = make(map[string]string)
+var sendCors bool
+var sendEtag bool
+var sendStrongETag bool
 
+// the main entry point to the program
 func main() {
+	// read flags
+	upCommand := flag.NewFlagSet("up", flag.ContinueOnError)
+
+	port := upCommand.Int("port", 1309, "The port number to start on")
+	cors := upCommand.Bool("cors", false, "Allow blanket CORS access on requests")
+	etag := upCommand.Bool("etag", false, "Send ETAG with each response")
+	strong := upCommand.Bool("strong", false, "Use strong ETag if applicable")
+	dir := upCommand.String("dir", ".", "Folder to use, if no config file is present")
+
+	flagErr := upCommand.Parse(os.Args[1:])
+	if flagErr != nil {
+		os.Exit(0)
+		return
+	}
+
+	// copy options to global
+	sendCors = *cors
+	sendEtag = *etag
+	sendStrongETag = *strong
+
+	fmt.Println("  Port: ", port)
+	fmt.Println("  CORS Enabled: ", sendCors)
+	fmt.Println("  ETag Enabled: ", sendEtag)
+
 	// read if there is a list of files
 	lines := readConfigFile()
 	if lines == nil {
-		return
+		lines = make([]string, 0)
+		lines = append(lines, *dir)
 	}
 
 	// create a file map
@@ -36,14 +68,19 @@ func main() {
 
 	// start a HTTP server
 	http.HandleFunc("/", httpHandler)
-	fmt.Println("Starting HTTP server on http://localhost:1309 ...")
-	http.ListenAndServe(":1309", nil)
+	address := ":" + strconv.Itoa(*port)
+	fmt.Println("Starting HTTP server on http://localhost:" + address + " ...")
+	http.ListenAndServe(address, nil)
 }
 
+// this function reads the configuration file.
+// if the file is not present, nil is returned.
+// this is just a convenience function to read
+// entire file and split on new line characters
 func readConfigFile() []string {
 	bytes, err := os.ReadFile("config.up")
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println("config.up file not found")
 		return nil
 	}
 
@@ -89,7 +126,7 @@ func createFileMap(lines []string) error {
 				continue
 			}
 
-			fmt.Println("Wiring file: " + absPath + " as " + fileStat.Name())
+			// fmt.Println("Wiring file: " + absPath + " as " + fileStat.Name())
 			fileMap["/"+fileStat.Name()] = absPath
 			continue
 		}
@@ -107,7 +144,7 @@ func createFileMap(lines []string) error {
 					uriPath = filePath[len(absPath):]
 				}
 
-				fmt.Println("Wiring file from folder: " + filePath)
+				// fmt.Println("Wiring file from folder: " + filePath)
 				fileMap[uriPath] = filePath
 			}
 		}
@@ -116,6 +153,10 @@ func createFileMap(lines []string) error {
 	return nil
 }
 
+// the HTTP handler invoked for each request that we receive
+// from the client. If the URI path is empty '/' we send back
+// the index.html file if present. If not, a 404 is sent back.
+// 404 response does not carry CORS headers.
 func httpHandler(writer http.ResponseWriter, request *http.Request) {
 	uriPath := request.URL.Path
 
@@ -124,11 +165,16 @@ func httpHandler(writer http.ResponseWriter, request *http.Request) {
 	}
 
 	absPath, exists := fileMap[uriPath]
-
 	if !exists {
 		writer.WriteHeader(http.StatusNotFound)
 		writer.Write([]byte("Not found"))
 		return
+	}
+
+	if sendCors {
+		writer.Header().Set("Access-Control-Allow-Origin", "*")
+		writer.Header().Set("Access-Control-Allow-Methods", "GET")
+		writer.Header().Set("Access-Control-Max-Age", "86400")
 	}
 
 	fmt.Println("Serving file from: " + absPath)
@@ -140,7 +186,7 @@ func listAllFilesFromFolder(path string, recursive bool) ([]string, error) {
 
 	// basic valid checks
 	if path == "" {
-		return nil, errors.New("Path for dir list cannot be empty")
+		return nil, errors.New("path for dir list cannot be empty")
 	}
 
 	// read files from the path
@@ -182,10 +228,8 @@ func listAllFilesFromFolder(path string, recursive bool) ([]string, error) {
 	return fileList, nil
 }
 
-//
 // Function responsible to serve the valid request.
 // Checks that the URI matches a file on disk have already been made.
-//
 func serveFile(writer http.ResponseWriter, request *http.Request, absFilePath string) {
 	stat, err := os.Lstat(absFilePath)
 	if err != nil {
@@ -202,15 +246,12 @@ func serveFile(writer http.ResponseWriter, request *http.Request, absFilePath st
 	}
 	defer file.Close()
 
-	// fmt.Println(stat.Size())
 	serveContent(writer, request, absFilePath, stat.ModTime(), stat.Size(), file)
 }
 
 // ---------------------------------------------------------------------------------------
 
-//
 // Copied from http/fs.go/toHTTPError
-//
 func toHTTPError(err error) (msg string, httpStatus int) {
 	if errors.Is(err, fs.ErrNotExist) {
 		return "404 page not found", http.StatusNotFound
@@ -222,9 +263,7 @@ func toHTTPError(err error) (msg string, httpStatus int) {
 	return "500 Internal Server Error", http.StatusInternalServerError
 }
 
-//
 // Copied from http/fs.go/Error
-//
 func Error(w http.ResponseWriter, error string, code int) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -382,6 +421,19 @@ func serveContent(w http.ResponseWriter, r *http.Request, name string, modtime t
 		}
 	}
 
+	// check for strong etag
+	if sendEtag {
+		if sendStrongETag {
+			hash := md5.New()
+			io.Copy(hash, sendContent)
+			hashValue := hash.Sum(nil)
+			w.Header().Set("ETag", hex.EncodeToString(hashValue[:]))
+		} else {
+			w.Header().Set("ETag", "W/"+strconv.FormatInt(size, 10)+"-"+strconv.FormatInt(modtime.UnixMilli(), 10))
+		}
+	}
+
+	// this should be the last
 	w.WriteHeader(code)
 
 	if r.Method != "HEAD" {
